@@ -47,11 +47,6 @@
             <span class="label">Date (264):</span> 
             <span class="value" id="date">-</span>
         </div>
-        
-        <div class="field">
-            <span class="label">Place (264):</span> 
-            <span class="value" id="place">-</span>
-        </div>
 
         <div class="field">
             <span class="label">Subjects & Places (6xx):</span> 
@@ -91,7 +86,6 @@
             }
         }
 
-        // Recursive function to extract all external URIs from JSON-LD nodes
         function findAllURIs(obj, foundURIs = new Set()) {
             if (!obj) return foundURIs;
             if (typeof obj === 'string') {
@@ -194,7 +188,6 @@
                     }
 
                     document.getElementById('date').innerText = root.date || root.datePublished || 'None';
-                    document.getElementById('place').innerText = root.place_of_publication || root['schema:locationCreated'] || 'None';
 
                     // Subjects & Places
                     const subList = document.getElementById('subjects');
