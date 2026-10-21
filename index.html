@@ -2,22 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Universal Alma Linked Data Viewer</title>
+    <title>Alma Record Viewer (JSON-LD & MARCXML Dual Mode)</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; background: #f4f6f9; color: #333; }
-        .card { background: #fff; padding: 35px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); max-width: 850px; margin: auto; }
+        .card { background: #fff; padding: 35px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); max-width: 900px; margin: auto; }
         h1 { font-size: 22px; color: #003366; margin-top: 0; line-height: 1.4; }
         .field { margin-bottom: 18px; border-bottom: 1px solid #eee; padding-bottom: 12px; }
         .label { font-weight: bold; color: #555; display: inline-block; width: 150px; vertical-align: top; }
-        .value { color: #222; display: inline-block; max-width: 650px; word-break: break-word; }
+        .value { color: #222; display: inline-block; max-width: 700px; word-break: break-word; }
         a { color: #0066cc; text-decoration: none; }
         a:hover { text-decoration: underline; }
         ul { margin: 0; padding-left: 20px; }
         li { margin-bottom: 8px; color: #444; }
-        .search-box { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #003366; }
-        input[type="text"] { width: 68%; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+        .search-box { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #003366; display: flex; gap: 10px; align-items: center; }
+        input[type="text"] { flex-grow: 1; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
         button { padding: 8px 15px; background: #003366; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
         button:hover { background: #002244; }
+        .mode-switch { margin-bottom: 20px; background: #eef4fa; padding: 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+        .mode-btn { padding: 6px 12px; background: #fff; color: #003366; border: 1px solid #003366; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .mode-btn.active { background: #003366; color: white; }
         .uri-badge { display: inline-block; background: #eef4fa; color: #0066cc; border: 1px solid #bcdcda; border-radius: 3px; padding: 2px 7px; font-size: 11px; margin-left: 5px; margin-top: 3px; font-weight: 500; }
         .uri-badge:hover { background: #0066cc; color: white; }
     </style>
@@ -25,9 +28,17 @@
 <body>
     <div class="card">
         <div class="search-box">
-            <label class="label" for="mmsInput" style="width: 100px;">MMS ID:</label>
-            <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025436306561)">
-            <button onclick="loadRecord()">View Record</button>
+            <label for="mmsInput" style="font-weight:bold; color:#555;">MMS ID:</label>
+            <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025317006561)">
+            <button onclick="loadRecord()">Load Record</button>
+        </div>
+
+        <div class="mode-switch">
+            <span>Current Parsing Engine: <strong id="modeIndicator">MARCXML (Full Subfields $0/$1)</strong></span>
+            <div>
+                <button class="mode-btn active" id="btnMarc" onclick="switchMode('marc')">MARCXML Mode</button>
+                <button class="mode-btn" id="btnJson" onclick="switchMode('jsonld')">JSON-LD Mode</button>
+            </div>
         </div>
 
         <h1 id="title">Please enter an MMS ID or select a record.</h1>
@@ -75,229 +86,198 @@
 
     <script>
         const urlParams = new URLSearchParams(window.location.search);
-        const mmsParam = urlParams.get('mms');
-        
-        if (mmsParam) {
-            document.getElementById('mmsInput').value = mmsParam;
-            fetchAndRender(mmsParam);
-        } else {
-            document.getElementById('mmsInput').value = '9916025436306561';
-            fetchAndRender('9916025436306561');
-        }
+        let currentMms = urlParams.get('mms') || '9916025317006561';
+        let currentMode = urlParams.get('mode') || 'marc'; // 'marc' or 'jsonld'
+
+        document.getElementById('mmsInput').value = currentMms;
+        updateModeUI();
+        fetchAndRender(currentMms, currentMode);
 
         function loadRecord() {
             const mmsId = document.getElementById('mmsInput').value.trim();
             if (mmsId) {
-                window.history.pushState({}, '', `?mms=${mmsId}`);
-                fetchAndRender(mmsId);
+                currentMms = mmsId;
+                updateUrl();
+                fetchAndRender(currentMms, currentMode);
             } else {
                 alert('Please enter a valid MMS ID.');
             }
         }
 
-        function findAllURIs(obj, foundURIs = new Set()) {
-            if (!obj) return foundURIs;
-            
-            if (typeof obj === 'string') {
-                if (obj.startsWith('http://') || obj.startsWith('https://')) {
-                    if (!obj.includes('schema.org') && !obj.includes('w3.org') && !obj.includes('exlibrisgroup.com/alma/contexts')) {
-                        foundURIs.add(obj);
-                    }
-                }
-            } else if (Array.isArray(obj)) {
-                obj.forEach(item => findAllURIs(item, foundURIs));
-            } else if (typeof obj === 'object') {
-                for (let key in obj) {
-                    if (key === 'viafLink' && typeof obj[key] === 'string') {
-                        foundURIs.add(obj[key]);
-                    } else {
-                        findAllURIs(obj[key], foundURIs);
-                    }
-                }
-            }
-            return foundURIs;
+        function switchMode(mode) {
+            currentMode = mode;
+            updateModeUI();
+            updateUrl();
+            fetchAndRender(currentMms, currentMode);
         }
 
-        function formatEntityWithGraph(entity, graphNodes) {
-            if (!entity) return 'None';
-            
-            let label = '';
-            let targetId = null;
-
-            if (typeof entity === 'string') {
-                label = entity;
+        function updateModeUI() {
+            if (currentMode === 'marc') {
+                document.getElementById('btnMarc').className = 'mode-btn active';
+                document.getElementById('btnJson').className = 'mode-btn';
+                document.getElementById('modeIndicator').innerText = 'MARCXML (Full Subfields $0/$1)';
             } else {
-                label = entity.label || entity['rdfs:label'] || entity.name || entity['schema:name'] || '';
-                targetId = entity['@id'];
+                document.getElementById('btnJson').className = 'mode-btn active';
+                document.getElementById('btnMarc').className = 'mode-btn';
+                document.getElementById('modeIndicator').innerText = 'JSON-LD (Official Schema/Bibframe)';
             }
-
-            let urisSet = findAllURIs(entity);
-
-            if (targetId && graphNodes) {
-                const matchedNode = graphNodes.find(n => n['@id'] === targetId);
-                if (matchedNode) {
-                    if (!label) {
-                        label = matchedNode.label || matchedNode['rdfs:label'] || matchedNode.name || '';
-                    }
-                    findAllURIs(matchedNode, urisSet);
-                }
-            }
-
-            if (!label) label = targetId || 'Entity';
-
-            let linksHtml = '';
-            urisSet.forEach(uri => {
-                let domain = 'URI';
-                if (uri.includes('viaf.org')) domain = 'VIAF';
-                else if (uri.includes('wikidata.org')) domain = 'Wikidata';
-                else if (uri.includes('id.loc.gov')) domain = 'LCNAF / LCSH';
-                else if (uri.includes('geonames.org')) domain = 'GeoNames';
-                else if (uri.includes('fast.oclc.org')) domain = 'FAST';
-                else if (uri.includes('isni.org')) domain = 'ISNI';
-                else if (uri.includes('worldcat.org')) domain = 'WorldCat / OCLC';
-                else if (uri.includes('getty.edu')) domain = 'AAT / TGN';
-
-                linksHtml += ` <a href="${uri}" target="_blank" class="uri-badge">${domain}</a>`;
-            });
-
-            return `<span>${label}</span>${linksHtml}`;
         }
 
-        function fetchAndRender(mmsId) {
-            const jsonLdUrl = `https://open-na.hosted.exlibrisgroup.com/alma/01FALSC_NETWORK/bibs/${mmsId}.jsonld`;
+        function updateUrl() {
+            window.history.pushState({}, '', `?mms=${currentMms}&mode=${currentMode}`);
+        }
+
+        function makeBadge(uri) {
+            let domain = 'URI';
+            if (uri.includes('viaf.org')) domain = 'VIAF';
+            else if (uri.includes('wikidata.org')) domain = 'Wikidata';
+            else if (uri.includes('id.loc.gov')) domain = 'LCNAF / LCSH';
+            else if (uri.includes('geonames.org')) domain = 'GeoNames';
+            else if (uri.includes('fast.oclc.org')) domain = 'FAST';
+            else if (uri.includes('isni.org')) domain = 'ISNI';
+            else if (uri.includes('worldcat.org')) domain = 'WorldCat / OCLC';
+            else if (uri.includes('getty.edu')) domain = 'AAT / TGN';
+            else if (uri.includes('stars.library.ucf.edu')) domain = 'STARS';
+            return ` <a href="${uri}" target="_blank" class="uri-badge">${domain}</a>`;
+        }
+
+        function fetchAndRender(mmsId, mode) {
+            document.getElementById('title').innerText = 'Loading record (' + mode.toUpperCase() + ')...';
             
-            document.getElementById('title').innerText = 'Loading Linked Data...';
-            
-            fetch(jsonLdUrl)
-                .then(response => {
-                    if (!response.ok) throw new Error('Record not found');
-                    return response.json();
-                })
-                .then(data => {
-                    let graph = [];
-                    if (data['@graph']) {
-                        graph = data['@graph'];
-                    } else if (Array.isArray(data)) {
-                        graph = data;
-                    } else {
-                        graph = [data];
-                    }
+            if (mode === 'marc') {
+                fetch(`https://open-na.hosted.exlibrisgroup.com/alma/01FALSC_NETWORK/bibs/${mmsId}.xml`)
+                    .then(res => { if (!res.ok) throw new Error('Not found'); return res.text(); })
+                    .then(str => renderMarcXml(new DOMParser().parseFromString(str, "text/xml")))
+                    .catch(err => showError(err));
+            } else {
+                fetch(`https://open-na.hosted.exlibrisgroup.com/alma/01FALSC_NETWORK/bibs/${mmsId}.jsonld`)
+                    .then(res => { if (!res.ok) throw new Error('Not found'); return res.json(); })
+                    .then(data => renderJsonLd(data))
+                    .catch(err => showError(err));
+            }
+        }
 
-                    let root = graph.find(item => item.title || item['schema:name'] || (item['@type'] && !Array.isArray(item['@type']) && item['@type'].includes('Work'))) || graph[0] || data;
+        function showError(err) {
+            document.getElementById('title').innerText = 'Failed to load record. Please check the MMS ID.';
+            console.error(err);
+        }
 
-                    document.getElementById('title').innerText = root.title || root['schema:name'] / 'Untitled Record';
+        // --- MARCXML Renderer ---
+        function parseMarcField(fieldEl) {
+            let textParts = [];
+            let uris = [];
+            fieldEl.querySelectorAll('subfield').forEach(sub => {
+                let code = sub.getAttribute('code');
+                let val = sub.textContent.trim();
+                if ((code === '0' || code === '1' || code === 'u') && (val.startsWith('http://') || val.startsWith('https://'))) {
+                    uris.push(val);
+                } else {
+                    textParts.push(val);
+                }
+            });
+            let label = textParts.join(', ').replace(/,\s*,/g, ',').replace(/[.,;:\s]+$/, '');
+            let badges = '';
+            Array.from(new Set(uris)).forEach(u => badges += makeBadge(u));
+            return `<span>${label || 'Entity'}</span>${badges}`;
+        }
 
-                    // 1. Creator (100)
-                    let creators = root.creator || root['schema:author'];
-                    if (creators) {
-                        const creatorArray = Array.isArray(creators) ? creators : [creators];
-                        document.getElementById('creator').innerHTML = formatEntityWithGraph(creatorArray[0], graph);
-                    } else {
-                        document.getElementById('creator').innerText = 'None';
-                    }
+        function renderMarcXml(xmlDoc) {
+            let titleF = xmlDoc.querySelector('datafield[tag="245"]');
+            let title = titleF ? (titleF.querySelector('subfield[code="a"]')?.textContent || '') + ' ' + (titleF.querySelector('subfield[code="b"]')?.textContent || '') : 'Untitled';
+            document.getElementById('title').innerText = title.trim();
 
-                    // 2. Contributor (700)
-                    const contribList = document.getElementById('contributor');
-                    contribList.innerHTML = '';
-                    let contributors = [];
-                    if (root.contributors) contributors.push(...(Array.isArray(root.contributors) ? root.contributors : [root.contributors]));
-                    if (root.contributor) contributors.push(...(Array.isArray(root.contributor) ? root.contributor : [root.contributor]));
-                    if (root.contribution) contributors.push(...(Array.isArray(root.contribution) ? root.contribution : [root.contribution]));
+            let creatorF = xmlDoc.querySelector('datafield[tag="100"]');
+            document.getElementById('creator').innerHTML = creatorF ? parseMarcField(creatorF) : 'None';
 
-                    if (contributors.length > 0) {
-                        const uniqueContribs = Array.from(new Set(contributors));
-                        uniqueContribs.forEach(c => {
-                            const li = document.createElement('li');
-                            li.innerHTML = formatEntityWithGraph(c, graph);
-                            contribList.appendChild(li);
-                        });
-                    } else {
-                        contribList.innerHTML = '<li>None</li>';
-                    }
+            let contribList = document.getElementById('contributor');
+            contribList.innerHTML = '';
+            xmlDoc.querySelectorAll('datafield[tag="700"]').forEach(f => {
+                let li = document.createElement('li'); li.innerHTML = parseMarcField(f); contribList.appendChild(li);
+            });
+            if (!contribList.hasChildNodes()) contribList.innerHTML = '<li>None</li>';
 
-                    document.getElementById('date').innerText = root.date || root.datePublished || 'None';
-                    document.getElementById('place').innerText = root.place_of_publication || root['schema:locationCreated'] || 'None';
+            let pubF = xmlDoc.querySelector('datafield[tag="264"]');
+            document.getElementById('date').innerText = pubF?.querySelector('subfield[code="c"]')?.textContent || 'None';
+            document.getElementById('place').innerText = pubF?.querySelector('subfield[code="a"]')?.textContent || 'None';
 
-                    // 3. Places (651 / spatial)
-                    const placeList = document.getElementById('places');
-                    placeList.innerHTML = '';
-                    let spatialItems = [];
-                    if (root.spatial) spatialItems.push(...(Array.isArray(root.spatial) ? root.spatial : [root.spatial]));
+            let placeList = document.getElementById('places');
+            placeList.innerHTML = '';
+            xmlDoc.querySelectorAll('datafield[tag="651"]').forEach(f => {
+                let li = document.createElement('li'); li.innerHTML = parseMarcField(f); placeList.appendChild(li);
+            });
+            if (!placeList.hasChildNodes()) placeList.innerHTML = '<li>None</li>';
 
-                    // Also check subjects that contain GeoNames or Wikidata URIs and separate them as places
-                    let rawSubjects = [];
-                    if (root.subject) rawSubjects.push(...(Array.isArray(root.subject) ? root.subject : [root.subject]));
+            let subList = document.getElementById('subjects');
+            subList.innerHTML = '';
+            xmlDoc.querySelectorAll('datafield[tag="650"]').forEach(f => {
+                let li = document.createElement('li'); li.innerHTML = parseMarcField(f); subList.appendChild(li);
+            });
+            if (!subList.hasChildNodes()) subList.innerHTML = '<li>None</li>';
 
-                    let actualSubjects = [];
-                    rawSubjects.forEach(sub => {
-                        let uris = findAllURIs(sub);
-                        let isSpatial = false;
-                        uris.forEach(u => {
-                            if (u.includes('geonames.org') || u.includes('wikidata.org')) {
-                                isSpatial = true;
-                            }
-                        });
-                        if (isSpatial) {
-                            spatialItems.push(sub);
-                        } else {
-                            actualSubjects.push(sub);
-                        }
-                    });
+            let accessList = document.getElementById('digitalAccess');
+            let accessHtml = '';
+            xmlDoc.querySelectorAll('datafield[tag="856"]').forEach(f => {
+                let u = f.querySelector('subfield[code="u"]')?.textContent;
+                let y = f.querySelector('subfield[code="y"]')?.textContent || u;
+                if (u) accessHtml += `<div><a href="${u}" target="_blank">${y}</a></div>`;
+            });
+            accessList.innerHTML = accessHtml || 'None';
 
-                    if (spatialItems.length > 0) {
-                        const uniqueSpatial = Array.from(new Set(spatialItems));
-                        uniqueSpatial.forEach(sp => {
-                            const li = document.createElement('li');
-                            li.innerHTML = formatEntityWithGraph(sp, graph);
-                            placeList.appendChild(li);
-                        });
-                    } else {
-                        placeList.innerHTML = '<li>None</li>';
-                    }
+            let noteList = document.getElementById('notes');
+            noteList.innerHTML = '';
+            xmlDoc.querySelectorAll('datafield[tag^="5"]').forEach(f => {
+                let a = f.querySelector('subfield[code="a"]')?.textContent;
+                if (a) { let li = document.createElement('li'); li.innerText = a; noteList.appendChild(li); }
+            });
+            if (!noteList.hasChildNodes()) noteList.innerHTML = '<li>None</li>';
+        }
 
-                    // 4. Subjects (650)
-                    const subList = document.getElementById('subjects');
-                    subList.innerHTML = '';
-                    if (actualSubjects.length > 0) {
-                        actualSubjects.forEach(sub => {
-                            const li = document.createElement('li');
-                            li.innerHTML = formatEntityWithGraph(sub, graph);
-                            subList.appendChild(li);
-                        });
-                    } else {
-                        subList.innerHTML = '<li>None</li>';
-                    }
+        // --- JSON-LD Renderer (Fallback/Original) ---
+        function renderJsonLd(data) {
+            document.getElementById('title').innerText = data.title || 'Untitled Record';
+            document.getElementById('creator').innerHTML = data.creator ? `<span>${data.creator.label || data.creator}</span>${data.creator['@id'] ? makeBadge(data.creator['@id']) : ''}` : 'None';
 
-                    // 5. Digital Access (856)
-                    let digitalAccessHtml = '';
-                    if (root.identifier) {
-                        const identifiers = Array.isArray(root.identifier) ? root.identifier : [root.identifier];
-                        identifiers.forEach(id => {
-                            if (id['@id']) {
-                                digitalAccessHtml += `<div>${formatEntityWithGraph(id, graph)}</div>`;
-                            }
-                        });
-                    }
-                    document.getElementById('digitalAccess').innerHTML = digitalAccessHtml || 'None';
+            let contribList = document.getElementById('contributor');
+            contribList.innerHTML = '';
+            let contribs = data.contributors || data.contributor || [];
+            if (!Array.isArray(contribs)) contribs = [contribs];
+            contribs.forEach(c => {
+                let li = document.createElement('li');
+                let name = c.label || c;
+                let badges = c['@id'] ? makeBadge(c['@id']) : '';
+                if (c.viafLink) badges += makeBadge(c.viafLink);
+                li.innerHTML = `<span>${name}</span>${badges}`;
+                contribList.appendChild(li);
+            });
+            if (!contribList.hasChildNodes()) contribList.innerHTML = '<li>None</li>';
 
-                    // 6. Notes (5xx)
-                    const noteList = document.getElementById('notes');
-                    noteList.innerHTML = '';
-                    if (root.note) {
-                        const notes = Array.isArray(root.note) ? root.note : [root.note];
-                        notes.forEach(note => {
-                            const li = document.createElement('li');
-                            li.innerText = typeof note === 'string' ? note : (note.label || JSON.stringify(note));
-                            noteList.appendChild(li);
-                        });
-                    } else {
-                        noteList.innerHTML = '<li>None</li>';
-                    }
-                })
-                .catch(error => {
-                    document.getElementById('title').innerText = 'Failed to load record. Please check the MMS ID.';
-                    console.error('Error fetching Alma JSON-LD:', error);
-                });
+            document.getElementById('date').innerText = data.date || 'None';
+            document.getElementById('place').innerText = data.place_of_publication || 'None';
+
+            let placeList = document.getElementById('places');
+            placeList.innerHTML = '<li>(JSON-LD hides subfield $1 GeoNames/Wikidata)</li>';
+
+            let subList = document.getElementById('subjects');
+            subList.innerHTML = '';
+            let subs = data.subject || [];
+            if (!Array.isArray(subs)) subs = [subs];
+            subs.forEach(s => {
+                let li = document.createElement('li');
+                li.innerHTML = `<span>${s.label || s}</span>${s['@id'] ? makeBadge(s['@id']) : ''}`;
+                subList.appendChild(li);
+            });
+            if (!subList.hasChildNodes()) subList.innerHTML = '<li>None</li>';
+
+            document.getElementById('digitalAccess').innerHTML = data.identifier ? data.identifier.map(i => i['@id'] ? `<div><a href="${i['@id']}" target="_blank">${i.label || i['@id']}</a></div>` : '').join('') : 'None';
+
+            let noteList = document.getElementById('notes');
+            noteList.innerHTML = '';
+            let notes = data.note || [];
+            if (!Array.isArray(notes)) notes = [notes];
+            notes.forEach(n => {
+                let li = document.createElement('li'); li.innerText = typeof n === 'string' ? n : n.label; noteList.appendChild(li);
+            });
+            if (!noteList.hasChildNodes()) noteList.innerHTML = '<li>None</li>';
         }
     </script>
 </body>
