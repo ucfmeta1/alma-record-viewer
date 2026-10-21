@@ -26,7 +26,7 @@
     <div class="card">
         <div class="search-box">
             <label class="label" for="mmsInput" style="width: 100px;">MMS ID:</label>
-            <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025436306561)">
+            <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025317006561)">
             <button onclick="loadRecord()">View Record</button>
         </div>
 
@@ -39,7 +39,7 @@
         
         <div class="field">
             <span class="label">Contributor (700):</span> 
-            <span class="value" id="contributor">-</span>
+            <span class="value"><ul id="contributor" style="list-style-type: none; padding: 0; margin: 0;"><li>-</li></ul></span>
         </div>
 
         <div class="field">
@@ -53,7 +53,7 @@
         </div>
         
         <div class="field">
-            <span class="label">Subjects (6xx):</span> 
+            <span class="label">Subjects & Places (6xx):</span> 
             <span class="value"><ul id="subjects"><li>-</li></ul></span>
         </div>
         
@@ -76,8 +76,8 @@
             document.getElementById('mmsInput').value = mmsParam;
             fetchAndRender(mmsParam);
         } else {
-            document.getElementById('mmsInput').value = '9916025436306561';
-            fetchAndRender('9916025436306561');
+            document.getElementById('mmsInput').value = '9916025317006561';
+            fetchAndRender('9916025317006561');
         }
 
         function loadRecord() {
@@ -90,10 +90,8 @@
             }
         }
 
-        // Recursive helper function: Collects ALL valid URLs inside any JSON object/property
         function extractURIs(obj, foundURIs = new Set()) {
             if (!obj) return foundURIs;
-
             if (typeof obj === 'string') {
                 if (obj.startsWith('http://') || obj.startsWith('https://')) {
                     foundURIs.add(obj);
@@ -102,7 +100,6 @@
                 obj.forEach(item => extractURIs(item, foundURIs));
             } else if (typeof obj === 'object') {
                 for (let key in obj) {
-                    // Do not extract the schema vocabulary type URI
                     if (key !== '@type') {
                         extractURIs(obj[key], foundURIs);
                     }
@@ -113,9 +110,8 @@
 
         function formatLinkedEntity(entity) {
             if (!entity) return 'None';
-            let label = entity.label || entity['rdfs:label'] || (typeof entity === 'string' ? entity : 'Link/Entity');
+            let label = entity.label || entity['rdfs:label'] || entity.name || (typeof entity === 'string' ? entity : 'Entity');
             
-            // Extract all URLs automatically regardless of property names
             const urisSet = extractURIs(entity);
             let linksHtml = '';
 
@@ -149,10 +145,33 @@
                     document.getElementById('title').innerText = data.title || 'Untitled';
                     
                     // Creator (100)
-                    document.getElementById('creator').innerHTML = data.creator ? formatLinkedEntity(data.creator) : 'None';
+                    let creators = [];
+                    if (data.creator) {
+                        creators = Array.isArray(data.creator) ? data.creator : [data.creator];
+                    }
+                    document.getElementById('creator').innerHTML = creators.length > 0 ? formatLinkedEntity(creators[0]) : 'None';
 
-                    // Contributor / Correspondent (700)
-                    document.getElementById('contributor').innerHTML = data.contributor ? formatLinkedEntity(data.contributor) : 'None';
+                    // Contributor (700) - check multiple possible JSON-LD properties
+                    const contribList = document.getElementById('contributor');
+                    contribList.innerHTML = '';
+                    let contributors = [];
+                    if (data.contributor) {
+                        contributors = Array.isArray(data.contributor) ? data.contributor : [data.contributor];
+                    } else if (data.contribution) {
+                        contributors = Array.isArray(data.contribution) ? data.contribution : [data.contribution];
+                    } else if (creators.length > 1) {
+                        contributors = creators.slice(1); // fallback if multiple creators
+                    }
+
+                    if (contributors.length > 0) {
+                        contributors.forEach(c => {
+                            const li = document.createElement('li');
+                            li.innerHTML = formatLinkedEntity(c);
+                            contribList.appendChild(li);
+                        });
+                    } else {
+                        contribList.innerHTML = '<li>None</li>';
+                    }
 
                     document.getElementById('date').innerText = data.date || 'None';
                     document.getElementById('place').innerText = data.place_of_publication || 'None';
@@ -165,12 +184,15 @@
                         document.getElementById('digitalAccess').innerText = 'None';
                     }
 
-                    // Subjects with Linked URIs (650 / 651 / FAST etc.)
+                    // Subjects & Places (6xx)
                     const subList = document.getElementById('subjects');
                     subList.innerHTML = '';
-                    if (data.subject) {
-                        const subjects = Array.isArray(data.subject) ? data.subject : [data.subject];
-                        subjects.forEach(sub => {
+                    let allSubjects = [];
+                    if (data.subject) allSubjects.push(...(Array.isArray(data.subject) ? data.subject : [data.subject]));
+                    if (data.spatial) allSubjects.push(...(Array.isArray(data.spatial) ? data.spatial : [data.spatial]));
+
+                    if (allSubjects.length > 0) {
+                        allSubjects.forEach(sub => {
                             const li = document.createElement('li');
                             li.innerHTML = formatLinkedEntity(sub);
                             subList.appendChild(li);
