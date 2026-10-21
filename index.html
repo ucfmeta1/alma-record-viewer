@@ -51,9 +51,14 @@
             <span class="label">Place (264):</span> 
             <span class="value" id="place">-</span>
         </div>
+
+        <div class="field">
+            <span class="label">Places (651):</span> 
+            <span class="value"><ul id="places"><li>-</li></ul></span>
+        </div>
         
         <div class="field">
-            <span class="label">Subjects & Places (6xx):</span> 
+            <span class="label">Subjects (650):</span> 
             <span class="value"><ul id="subjects"><li>-</li></ul></span>
         </div>
         
@@ -90,7 +95,6 @@
             }
         }
 
-        // Recursively extract all URIs including Alma-specific properties like viafLink
         function findAllURIs(obj, foundURIs = new Set()) {
             if (!obj) return foundURIs;
             
@@ -114,20 +118,34 @@
             return foundURIs;
         }
 
-        function formatLinkedEntity(entity) {
+        function formatEntityWithGraph(entity, graphNodes) {
             if (!entity) return 'None';
             
             let label = '';
+            let targetId = null;
+
             if (typeof entity === 'string') {
                 label = entity;
             } else {
                 label = entity.label || entity['rdfs:label'] || entity.name || entity['schema:name'] || '';
+                targetId = entity['@id'];
             }
-            if (!label) label = 'Entity';
 
-            const urisSet = findAllURIs(entity);
+            let urisSet = findAllURIs(entity);
+
+            if (targetId && graphNodes) {
+                const matchedNode = graphNodes.find(n => n['@id'] === targetId);
+                if (matchedNode) {
+                    if (!label) {
+                        label = matchedNode.label || matchedNode['rdfs:label'] || matchedNode.name || '';
+                    }
+                    findAllURIs(matchedNode, urisSet);
+                }
+            }
+
+            if (!label) label = targetId || 'Entity';
+
             let linksHtml = '';
-
             urisSet.forEach(uri => {
                 let domain = 'URI';
                 if (uri.includes('viaf.org')) domain = 'VIAF';
@@ -156,68 +174,120 @@
                     return response.json();
                 })
                 .then(data => {
-                    document.getElementById('title').innerText = data.title || 'Untitled Record';
-
-                    // 1. Creator (100)
-                    document.getElementById('creator').innerHTML = data.creator ? formatLinkedEntity(data.creator) : 'None';
-
-                    // 2. Contributor / Correspondent (700) - Alma uses plural "contributors"
-                    const contribList = document.getElementById('contributor');
-                    contribList.innerHTML = '';
-                    
-                    let rawContribs = data.contributors || data.contributor || data.contribution;
-                    let contributors = [];
-                    if (rawContribs) {
-                        contributors = Array.isArray(rawContribs) ? rawContribs : [rawContribs];
+                    let graph = [];
+                    if (data['@graph']) {
+                        graph = data['@graph'];
+                    } else if (Array.isArray(data)) {
+                        graph = data;
+                    } else {
+                        graph = [data];
                     }
 
+                    let root = graph.find(item => item.title || item['schema:name'] || (item['@type'] && !Array.isArray(item['@type']) && item['@type'].includes('Work'))) || graph[0] || data;
+
+                    document.getElementById('title').innerText = root.title || root['schema:name'] / 'Untitled Record';
+
+                    // 1. Creator (100)
+                    let creators = root.creator || root['schema:author'];
+                    if (creators) {
+                        const creatorArray = Array.isArray(creators) ? creators : [creators];
+                        document.getElementById('creator').innerHTML = formatEntityWithGraph(creatorArray[0], graph);
+                    } else {
+                        document.getElementById('creator').innerText = 'None';
+                    }
+
+                    // 2. Contributor (700)
+                    const contribList = document.getElementById('contributor');
+                    contribList.innerHTML = '';
+                    let contributors = [];
+                    if (root.contributors) contributors.push(...(Array.isArray(root.contributors) ? root.contributors : [root.contributors]));
+                    if (root.contributor) contributors.push(...(Array.isArray(root.contributor) ? root.contributor : [root.contributor]));
+                    if (root.contribution) contributors.push(...(Array.isArray(root.contribution) ? root.contribution : [root.contribution]));
+
                     if (contributors.length > 0) {
-                        contributors.forEach(c => {
+                        const uniqueContribs = Array.from(new Set(contributors));
+                        uniqueContribs.forEach(c => {
                             const li = document.createElement('li');
-                            li.innerHTML = formatLinkedEntity(c);
+                            li.innerHTML = formatEntityWithGraph(c, graph);
                             contribList.appendChild(li);
                         });
                     } else {
                         contribList.innerHTML = '<li>None</li>';
                     }
 
-                    document.getElementById('date').innerText = data.date || 'None';
-                    document.getElementById('place').innerText = data.place_of_publication || 'None';
+                    document.getElementById('date').innerText = root.date || root.datePublished || 'None';
+                    document.getElementById('place').innerText = root.place_of_publication || root['schema:locationCreated'] || 'None';
 
-                    // 3. Digital Access / Identifiers (856)
-                    let digitalAccessHtml = '';
-                    if (data.identifier) {
-                        const identifiers = Array.isArray(data.identifier) ? data.identifier : [data.identifier];
-                        identifiers.forEach(id => {
-                            if (id['@id']) {
-                                digitalAccessHtml += `<div>${formatLinkedEntity(id)}</div>`;
+                    // 3. Places (651 / spatial)
+                    const placeList = document.getElementById('places');
+                    placeList.innerHTML = '';
+                    let spatialItems = [];
+                    if (root.spatial) spatialItems.push(...(Array.isArray(root.spatial) ? root.spatial : [root.spatial]));
+
+                    // Also check subjects that contain GeoNames or Wikidata URIs and separate them as places
+                    let rawSubjects = [];
+                    if (root.subject) rawSubjects.push(...(Array.isArray(root.subject) ? root.subject : [root.subject]));
+
+                    let actualSubjects = [];
+                    rawSubjects.forEach(sub => {
+                        let uris = findAllURIs(sub);
+                        let isSpatial = false;
+                        uris.forEach(u => {
+                            if (u.includes('geonames.org') || u.includes('wikidata.org')) {
+                                isSpatial = true;
                             }
                         });
-                    }
-                    document.getElementById('digitalAccess').innerHTML = digitalAccessHtml || 'None';
+                        if (isSpatial) {
+                            spatialItems.push(sub);
+                        } else {
+                            actualSubjects.push(sub);
+                        }
+                    });
 
-                    // 4. Subjects & Places (6xx)
+                    if (spatialItems.length > 0) {
+                        const uniqueSpatial = Array.from(new Set(spatialItems));
+                        uniqueSpatial.forEach(sp => {
+                            const li = document.createElement('li');
+                            li.innerHTML = formatEntityWithGraph(sp, graph);
+                            placeList.appendChild(li);
+                        });
+                    } else {
+                        placeList.innerHTML = '<li>None</li>';
+                    }
+
+                    // 4. Subjects (650)
                     const subList = document.getElementById('subjects');
                     subList.innerHTML = '';
-                    if (data.subject) {
-                        const subjects = Array.isArray(data.subject) ? data.subject : [data.subject];
-                        subjects.forEach(sub => {
+                    if (actualSubjects.length > 0) {
+                        actualSubjects.forEach(sub => {
                             const li = document.createElement('li');
-                            li.innerHTML = formatLinkedEntity(sub);
+                            li.innerHTML = formatEntityWithGraph(sub, graph);
                             subList.appendChild(li);
                         });
                     } else {
                         subList.innerHTML = '<li>None</li>';
                     }
 
-                    // 5. Notes (5xx)
+                    // 5. Digital Access (856)
+                    let digitalAccessHtml = '';
+                    if (root.identifier) {
+                        const identifiers = Array.isArray(root.identifier) ? root.identifier : [root.identifier];
+                        identifiers.forEach(id => {
+                            if (id['@id']) {
+                                digitalAccessHtml += `<div>${formatEntityWithGraph(id, graph)}</div>`;
+                            }
+                        });
+                    }
+                    document.getElementById('digitalAccess').innerHTML = digitalAccessHtml || 'None';
+
+                    // 6. Notes (5xx)
                     const noteList = document.getElementById('notes');
                     noteList.innerHTML = '';
-                    if (data.note) {
-                        const notes = Array.isArray(data.note) ? data.note : [data.note];
+                    if (root.note) {
+                        const notes = Array.isArray(root.note) ? root.note : [root.note];
                         notes.forEach(note => {
                             const li = document.createElement('li');
-                            li.innerText = typeof note === 'string' ? note : note.label;
+                            li.innerText = typeof note === 'string' ? note : (note.label || JSON.stringify(note));
                             noteList.appendChild(li);
                         });
                     } else {
