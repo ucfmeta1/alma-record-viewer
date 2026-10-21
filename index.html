@@ -2,97 +2,143 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Alma Linked Data Preview</title>
+    <title>Alma Linked Data Viewer</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; background: #f4f6f9; color: #333; }
         .card { background: #fff; padding: 35px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); max-width: 800px; margin: auto; }
         h1 { font-size: 22px; color: #003366; margin-top: 0; line-height: 1.4; }
         .field { margin-bottom: 18px; border-bottom: 1px solid #eee; padding-bottom: 12px; }
-        .label { font-weight: bold; color: #555; display: inline-block; width: 140px; }
-        .value { color: #222; }
+        .label { font-weight: bold; color: #555; display: inline-block; width: 140px; vertical-align: top; }
+        .value { color: #222; display: inline-block; max-width: 620px; word-break: break-word; }
         a { color: #0066cc; text-decoration: none; }
         a:hover { text-decoration: underline; }
-        ul { margin: 5px 0 0 140px; padding-left: 0; list-style-type: disc; }
+        ul { margin: 0; padding-left: 20px; }
         li { margin-bottom: 5px; color: #444; }
+        .search-box { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #003366; }
+        input[type="text"] { width: 70%; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 8px 15px; background: #003366; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        button:hover { background: #002244; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1 id="title">Loading Alma Linked Data...</h1>
+        <!-- Dynamic query input box to view any record by MMS ID -->
+        <div class="search-box">
+            <label class="label" for="mmsInput" style="width: 100px;">MMS ID:</label>
+            <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025436306561)">
+            <button onclick="loadRecord()">View Record</button>
+        </div>
+
+        <h1 id="title">Please enter an MMS ID or select a record.</h1>
         
         <div class="field">
             <span class="label">Creator:</span> 
-            <span class="value" id="creator">Loading...</span>
+            <span class="value" id="creator">-</span>
         </div>
         
         <div class="field">
             <span class="label">Date:</span> 
-            <span class="value" id="date">Loading...</span>
+            <span class="value" id="date">-</span>
         </div>
         
         <div class="field">
             <span class="label">Place:</span> 
-            <span class="value" id="place">Loading...</span>
+            <span class="value" id="place">-</span>
         </div>
         
         <div class="field">
             <span class="label">Subjects:</span> 
-            <ul id="subjects"></ul>
+            <span class="value"><ul id="subjects"><li>-</li></ul></span>
         </div>
         
         <div class="field" style="border-bottom: none;">
             <span class="label">Notes:</span> 
-            <ul id="notes"></ul>
+            <span class="value"><ul id="notes"><li>-</li></ul></span>
         </div>
     </div>
 
     <script>
-        // Alma real-time JSON-LD public endpoint URL
-        const jsonLdUrl = 'https://open-na.hosted.exlibrisgroup.com/alma/01FALSC_NETWORK/bibs/9916025436306561.jsonld';
+        // Automatically check if the URL contains a ?mms=xxxx parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const mmsParam = urlParams.get('mms');
+        
+        if (mmsParam) {
+            document.getElementById('mmsInput').value = mmsParam;
+            fetchAndRender(mmsParam);
+        }
 
-        fetch(jsonLdUrl)
-            .then(response => response.json())
-            .then(data => {
-                // Populate Title
-                document.getElementById('title').innerText = data.title || 'Untitled';
-                
-                // Populate Creator and link
-                if (data.creator) {
-                    document.getElementById('creator').innerHTML = `<a href="${data.creator['@id']}" target="_blank">${data.creator.label}</a>`;
-                } else {
-                    document.getElementById('creator').innerText = 'None';
-                }
-                
-                // Populate Date and Place of Publication
-                document.getElementById('date').innerText = data.date || 'None';
-                document.getElementById('place').innerText = data.place_of_publication || 'None';
-                
-                // Populate Subjects
-                if (data.subject) {
+        function loadRecord() {
+            const mmsId = document.getElementById('mmsInput').value.trim();
+            if (mmsId) {
+                // Update URL for easy sharing
+                window.history.pushState({}, '', `?mms=${mmsId}`);
+                fetchAndRender(mmsId);
+            } else {
+                alert('Please enter a valid MMS ID.');
+            }
+        }
+
+        function fetchAndRender(mmsId) {
+            // Exilbris official public real-time JSON-LD endpoint
+            const jsonLdUrl = `https://open-na.hosted.exlibrisgroup.com/alma/01FALSC_NETWORK/bibs/${mmsId}.jsonld`;
+            
+            document.getElementById('title').innerText = 'Loading Linked Data...';
+            
+            fetch(jsonLdUrl)
+                .then(response => {
+                    if (!response.ok) throw new Error('Record not found');
+                    return response.json();
+                })
+                .then(data => {
+                    document.getElementById('title').innerText = data.title || 'Untitled';
+                    
+                    // Creator
+                    const creatorElem = document.getElementById('creator');
+                    if (data.creator) {
+                        creatorElem.innerHTML = `<a href="${data.creator['@id'] || '#'}" target="_blank">${data.creator.label}</a>`;
+                    } else {
+                        creatorElem.innerText = 'None';
+                    }
+                    
+                    document.getElementById('date').innerText = data.date || 'None';
+                    document.getElementById('place').innerText = data.place_of_publication || 'None';
+                    
+                    // Subjects
                     const subList = document.getElementById('subjects');
                     subList.innerHTML = '';
-                    data.subject.forEach(sub => {
-                        const li = document.createElement('li');
-                        li.innerText = sub.label;
-                        subList.appendChild(li);
-                    });
-                }
-                
-                // Populate Notes
-                if (data.note) {
+                    if (data.subject && data.subject.length > 0) {
+                        data.subject.forEach(sub => {
+                            const li = document.createElement('li');
+                            li.innerText = sub.label;
+                            subList.appendChild(li);
+                        });
+                    } else {
+                        subList.innerHTML = '<li>None</li>';
+                    }
+                    
+                    // Notes
                     const noteList = document.getElementById('notes');
                     noteList.innerHTML = '';
-                    data.note.forEach(note => {
-                        const li = document.createElement('li');
-                        li.innerText = note;
-                        noteList.appendChild(li);
-                    });
-                }
-            })
-            .catch(error => {
-                document.getElementById('title').innerText = 'Failed to load linked data.';
-                console.error('Error:', error);
-            });
+                    if (data.note && data.note.length > 0) {
+                        data.note.forEach(note => {
+                            const li = document.createElement('li');
+                            li.innerText = note;
+                            noteList.appendChild(li);
+                        });
+                    } else {
+                        noteList.innerHTML = '<li>None</li>';
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('title').innerText = 'Failed to load record. Please check the MMS ID.';
+                    document.getElementById('creator').innerText = '-';
+                    document.getElementById('date').innerText = '-';
+                    document.getElementById('place').innerText = '-';
+                    document.getElementById('subjects').innerHTML = '<li>-</li>';
+                    document.getElementById('notes').innerHTML = '<li>-</li>';
+                    console.error('Error:', error);
+                });
+        }
     </script>
 </body>
 </html>
