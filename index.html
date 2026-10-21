@@ -26,7 +26,7 @@
     <div class="card">
         <div class="search-box">
             <label class="label" for="mmsInput" style="width: 100px;">MMS ID:</label>
-            <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025317006561)">
+            <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025436306561)">
             <button onclick="loadRecord()">View Record</button>
         </div>
 
@@ -76,8 +76,8 @@
             document.getElementById('mmsInput').value = mmsParam;
             fetchAndRender(mmsParam);
         } else {
-            document.getElementById('mmsInput').value = '9916025317006561';
-            fetchAndRender('9916025317006561');
+            document.getElementById('mmsInput').value = '9916025436306561';
+            fetchAndRender('9916025436306561');
         }
 
         function loadRecord() {
@@ -90,14 +90,13 @@
             }
         }
 
-        // Deep recursive search to find ALL URIs in any object or nested sub-object
+        // Recursively extract all URIs including Alma-specific properties like viafLink
         function findAllURIs(obj, foundURIs = new Set()) {
             if (!obj) return foundURIs;
             
             if (typeof obj === 'string') {
                 if (obj.startsWith('http://') || obj.startsWith('https://')) {
-                    // Filter out schema ontology vocabulary definitions
-                    if (!obj.includes('schema.org') && !obj.includes('w3.org')) {
+                    if (!obj.includes('schema.org') && !obj.includes('w3.org') && !obj.includes('exlibrisgroup.com/alma/contexts')) {
                         foundURIs.add(obj);
                     }
                 }
@@ -105,7 +104,11 @@
                 obj.forEach(item => findAllURIs(item, foundURIs));
             } else if (typeof obj === 'object') {
                 for (let key in obj) {
-                    findAllURIs(obj[key], foundURIs);
+                    if (key === 'viafLink' && typeof obj[key] === 'string') {
+                        foundURIs.add(obj[key]);
+                    } else {
+                        findAllURIs(obj[key], foundURIs);
+                    }
                 }
             }
             return foundURIs;
@@ -114,19 +117,14 @@
         function formatLinkedEntity(entity) {
             if (!entity) return 'None';
             
-            // Extract best human-readable label
             let label = '';
             if (typeof entity === 'string') {
                 label = entity;
             } else {
                 label = entity.label || entity['rdfs:label'] || entity.name || entity['schema:name'] || '';
-                if (!label && entity.agent) {
-                    label = entity.agent.label || entity.agent['rdfs:label'] || entity.agent.name || '';
-                }
             }
             if (!label) label = 'Entity';
 
-            // Recursively collect all URIs associated with this entity
             const urisSet = findAllURIs(entity);
             let linksHtml = '';
 
@@ -138,8 +136,8 @@
                 else if (uri.includes('geonames.org')) domain = 'GeoNames';
                 else if (uri.includes('fast.oclc.org')) domain = 'FAST';
                 else if (uri.includes('isni.org')) domain = 'ISNI';
+                else if (uri.includes('worldcat.org')) domain = 'WorldCat / OCLC';
                 else if (uri.includes('getty.edu')) domain = 'AAT / TGN';
-                else if (uri.includes('stars.library.ucf.edu')) domain = 'STARS';
 
                 linksHtml += ` <a href="${uri}" target="_blank" class="uri-badge">${domain}</a>`;
             });
@@ -158,53 +156,23 @@
                     return response.json();
                 })
                 .then(data => {
-                    // Normalize graph array if JSON-LD uses @graph container
-                    let graph = [];
-                    if (data['@graph']) {
-                        graph = data['@graph'];
-                    } else if (Array.isArray(data)) {
-                        graph = data;
-                    } else {
-                        graph = [data];
-                    }
+                    document.getElementById('title').innerText = data.title || 'Untitled Record';
 
-                    // Find main root object or merge attributes
-                    let root = graph.find(item => item.title || item['schema:name'] || item['@type']) || data;
+                    // 1. Creator (100)
+                    document.getElementById('creator').innerHTML = data.creator ? formatLinkedEntity(data.creator) : 'None';
 
-                    document.getElementById('title').innerText = root.title || root['schema:name'] || 'Untitled Record';
-
-                    // Creator (100)
-                    let creators = root.creator || root['schema:author'] || root['schema:creator'];
-                    if (creators) {
-                        const creatorArray = Array.isArray(creators) ? creators : [creators];
-                        document.getElementById('creator').innerHTML = formatLinkedEntity(creatorArray[0]);
-                    } else {
-                        document.getElementById('creator').innerText = 'None';
-                    }
-
-                    // Contributor (700)
+                    // 2. Contributor / Correspondent (700) - Alma uses plural "contributors"
                     const contribList = document.getElementById('contributor');
                     contribList.innerHTML = '';
-                    let contributors = [];
-
-                    // Look through multiple possible JSON-LD / BIBFRAME mapping paths
-                    if (root.contributor) contributors.push(...(Array.isArray(root.contributor) ? root.contributor : [root.contributor]));
-                    if (root['schema:contributor']) contributors.push(...(Array.isArray(root['schema:contributor']) ? root['schema:contributor'] : [root['schema:contributor']]));
-                    if (root.contribution) contributors.push(...(Array.isArray(root.contribution) ? root.contribution : [root.contribution]));
                     
-                    // Fallback to graph items matching Agent or Contributor types
-                    graph.forEach(item => {
-                        if (item['@type'] && (item['@type'].includes('Contributor') || item['@type'].includes('Person'))) {
-                            if (item !== root.creator && !contributors.includes(item)) {
-                                contributors.push(item);
-                            }
-                        }
-                    });
+                    let rawContribs = data.contributors || data.contributor || data.contribution;
+                    let contributors = [];
+                    if (rawContribs) {
+                        contributors = Array.isArray(rawContribs) ? rawContribs : [rawContribs];
+                    }
 
                     if (contributors.length > 0) {
-                        // De-duplicate contributors
-                        const uniqueContribs = Array.from(new Set(contributors));
-                        uniqueContribs.forEach(c => {
+                        contributors.forEach(c => {
                             const li = document.createElement('li');
                             li.innerHTML = formatLinkedEntity(c);
                             contribList.appendChild(li);
@@ -213,30 +181,27 @@
                         contribList.innerHTML = '<li>None</li>';
                     }
 
-                    document.getElementById('date').innerText = root.date || root.datePublished || root['schema:datePublished'] || 'None';
-                    document.getElementById('place').innerText = root.place_of_publication || root['schema:locationCreated'] || 'None';
+                    document.getElementById('date').innerText = data.date || 'None';
+                    document.getElementById('place').innerText = data.place_of_publication || 'None';
 
-                    // Digital Access (856)
-                    let digitalUrl = root.url || root.isPartOf || root['schema:url'] || root['schema:sameAs'];
-                    if (digitalUrl) {
-                        if (Array.isArray(digitalUrl)) digitalUrl = digitalUrl[0];
-                        if (typeof digitalUrl === 'object') digitalUrl = digitalUrl['@id'] || digitalUrl.url;
-                        document.getElementById('digitalAccess').innerHTML = `<a href="${digitalUrl}" target="_blank">${digitalUrl}</a>`;
-                    } else {
-                        document.getElementById('digitalAccess').innerText = 'None';
+                    // 3. Digital Access / Identifiers (856)
+                    let digitalAccessHtml = '';
+                    if (data.identifier) {
+                        const identifiers = Array.isArray(data.identifier) ? data.identifier : [data.identifier];
+                        identifiers.forEach(id => {
+                            if (id['@id']) {
+                                digitalAccessHtml += `<div>${formatLinkedEntity(id)}</div>`;
+                            }
+                        });
                     }
+                    document.getElementById('digitalAccess').innerHTML = digitalAccessHtml || 'None';
 
-                    // Subjects & Places (6xx)
+                    // 4. Subjects & Places (6xx)
                     const subList = document.getElementById('subjects');
                     subList.innerHTML = '';
-                    let allSubjects = [];
-                    
-                    if (root.subject) allSubjects.push(...(Array.isArray(root.subject) ? root.subject : [root.subject]));
-                    if (root.spatial) allSubjects.push(...(Array.isArray(root.spatial) ? root.spatial : [root.spatial]));
-                    if (root['schema:keywords']) allSubjects.push(...(Array.isArray(root['schema:keywords']) ? root['schema:keywords'] : [root['schema:keywords']]));
-
-                    if (allSubjects.length > 0) {
-                        allSubjects.forEach(sub => {
+                    if (data.subject) {
+                        const subjects = Array.isArray(data.subject) ? data.subject : [data.subject];
+                        subjects.forEach(sub => {
                             const li = document.createElement('li');
                             li.innerHTML = formatLinkedEntity(sub);
                             subList.appendChild(li);
@@ -245,15 +210,14 @@
                         subList.innerHTML = '<li>None</li>';
                     }
 
-                    // Notes (5xx)
+                    // 5. Notes (5xx)
                     const noteList = document.getElementById('notes');
                     noteList.innerHTML = '';
-                    let notes = root.note || root['schema:description'];
-                    if (notes) {
-                        const noteArray = Array.isArray(notes) ? notes : [notes];
-                        noteArray.forEach(note => {
+                    if (data.note) {
+                        const notes = Array.isArray(data.note) ? data.note : [data.note];
+                        notes.forEach(note => {
                             const li = document.createElement('li');
-                            li.innerText = typeof note === 'string' ? note : (note.label || note.value || JSON.stringify(note));
+                            li.innerText = typeof note === 'string' ? note : note.label;
                             noteList.appendChild(li);
                         });
                     } else {
