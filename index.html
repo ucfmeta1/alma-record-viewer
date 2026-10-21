@@ -2,27 +2,28 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Alma Linked Data Viewer</title>
+    <title>Universal Alma Linked Data Viewer</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; background: #f4f6f9; color: #333; }
-        .card { background: #fff; padding: 35px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); max-width: 800px; margin: auto; }
+        .card { background: #fff; padding: 35px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); max-width: 850px; margin: auto; }
         h1 { font-size: 22px; color: #003366; margin-top: 0; line-height: 1.4; }
         .field { margin-bottom: 18px; border-bottom: 1px solid #eee; padding-bottom: 12px; }
-        .label { font-weight: bold; color: #555; display: inline-block; width: 140px; vertical-align: top; }
-        .value { color: #222; display: inline-block; max-width: 620px; word-break: break-word; }
+        .label { font-weight: bold; color: #555; display: inline-block; width: 150px; vertical-align: top; }
+        .value { color: #222; display: inline-block; max-width: 650px; word-break: break-word; }
         a { color: #0066cc; text-decoration: none; }
         a:hover { text-decoration: underline; }
         ul { margin: 0; padding-left: 20px; }
-        li { margin-bottom: 5px; color: #444; }
+        li { margin-bottom: 8px; color: #444; }
         .search-box { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #003366; }
-        input[type="text"] { width: 70%; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+        input[type="text"] { width: 68%; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
         button { padding: 8px 15px; background: #003366; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
         button:hover { background: #002244; }
+        .uri-badge { display: inline-block; background: #eef4fa; color: #0066cc; border: 1px solid #bcdcda; border-radius: 3px; padding: 2px 7px; font-size: 11px; margin-left: 5px; margin-top: 3px; font-weight: 500; }
+        .uri-badge:hover { background: #0066cc; color: white; }
     </style>
 </head>
 <body>
     <div class="card">
-        <!-- Dynamic query input box to view any record by MMS ID -->
         <div class="search-box">
             <label class="label" for="mmsInput" style="width: 100px;">MMS ID:</label>
             <input type="text" id="mmsInput" placeholder="Enter MMS ID (e.g., 9916025436306561)">
@@ -32,45 +33,56 @@
         <h1 id="title">Please enter an MMS ID or select a record.</h1>
         
         <div class="field">
-            <span class="label">Creator:</span> 
+            <span class="label">Creator (100):</span> 
             <span class="value" id="creator">-</span>
         </div>
         
         <div class="field">
-            <span class="label">Date:</span> 
+            <span class="label">Contributor (700):</span> 
+            <span class="value" id="contributor">-</span>
+        </div>
+
+        <div class="field">
+            <span class="label">Date (264):</span> 
             <span class="value" id="date">-</span>
         </div>
         
         <div class="field">
-            <span class="label">Place:</span> 
+            <span class="label">Place (264):</span> 
             <span class="value" id="place">-</span>
         </div>
         
         <div class="field">
-            <span class="label">Subjects:</span> 
+            <span class="label">Subjects (6xx):</span> 
             <span class="value"><ul id="subjects"><li>-</li></ul></span>
         </div>
         
+        <div class="field">
+            <span class="label">Digital Access (856):</span> 
+            <span class="value" id="digitalAccess">-</span>
+        </div>
+
         <div class="field" style="border-bottom: none;">
-            <span class="label">Notes:</span> 
+            <span class="label">Notes (5xx):</span> 
             <span class="value"><ul id="notes"><li>-</li></ul></span>
         </div>
     </div>
 
     <script>
-        // Automatically check if the URL contains a ?mms=xxxx parameter
         const urlParams = new URLSearchParams(window.location.search);
         const mmsParam = urlParams.get('mms');
         
         if (mmsParam) {
             document.getElementById('mmsInput').value = mmsParam;
             fetchAndRender(mmsParam);
+        } else {
+            document.getElementById('mmsInput').value = '9916025436306561';
+            fetchAndRender('9916025436306561');
         }
 
         function loadRecord() {
             const mmsId = document.getElementById('mmsInput').value.trim();
             if (mmsId) {
-                // Update URL for easy sharing
                 window.history.pushState({}, '', `?mms=${mmsId}`);
                 fetchAndRender(mmsId);
             } else {
@@ -78,8 +90,52 @@
             }
         }
 
+        // Recursive helper function: Collects ALL valid URLs inside any JSON object/property
+        function extractURIs(obj, foundURIs = new Set()) {
+            if (!obj) return foundURIs;
+
+            if (typeof obj === 'string') {
+                if (obj.startsWith('http://') || obj.startsWith('https://')) {
+                    foundURIs.add(obj);
+                }
+            } else if (Array.isArray(obj)) {
+                obj.forEach(item => extractURIs(item, foundURIs));
+            } else if (typeof obj === 'object') {
+                for (let key in obj) {
+                    // Do not extract the schema vocabulary type URI
+                    if (key !== '@type') {
+                        extractURIs(obj[key], foundURIs);
+                    }
+                }
+            }
+            return foundURIs;
+        }
+
+        function formatLinkedEntity(entity) {
+            if (!entity) return 'None';
+            let label = entity.label || entity['rdfs:label'] || (typeof entity === 'string' ? entity : 'Link/Entity');
+            
+            // Extract all URLs automatically regardless of property names
+            const urisSet = extractURIs(entity);
+            let linksHtml = '';
+
+            urisSet.forEach(uri => {
+                let domain = 'URI';
+                if (uri.includes('viaf.org')) domain = 'VIAF';
+                else if (uri.includes('wikidata.org')) domain = 'Wikidata';
+                else if (uri.includes('id.loc.gov')) domain = 'LCNAF / LCSH';
+                else if (uri.includes('geonames.org')) domain = 'GeoNames';
+                else if (uri.includes('fast.oclc.org')) domain = 'FAST';
+                else if (uri.includes('isni.org')) domain = 'ISNI';
+                else if (uri.includes('getty.edu')) domain = 'AAT / TGN';
+
+                linksHtml += ` <a href="${uri}" target="_blank" class="uri-badge">${domain}</a>`;
+            });
+
+            return `<span>${label}</span>${linksHtml}`;
+        }
+
         function fetchAndRender(mmsId) {
-            // Exilbris official public real-time JSON-LD endpoint
             const jsonLdUrl = `https://open-na.hosted.exlibrisgroup.com/alma/01FALSC_NETWORK/bibs/${mmsId}.jsonld`;
             
             document.getElementById('title').innerText = 'Loading Linked Data...';
@@ -92,24 +148,31 @@
                 .then(data => {
                     document.getElementById('title').innerText = data.title || 'Untitled';
                     
-                    // Creator
-                    const creatorElem = document.getElementById('creator');
-                    if (data.creator) {
-                        creatorElem.innerHTML = `<a href="${data.creator['@id'] || '#'}" target="_blank">${data.creator.label}</a>`;
-                    } else {
-                        creatorElem.innerText = 'None';
-                    }
-                    
+                    // Creator (100)
+                    document.getElementById('creator').innerHTML = data.creator ? formatLinkedEntity(data.creator) : 'None';
+
+                    // Contributor / Correspondent (700)
+                    document.getElementById('contributor').innerHTML = data.contributor ? formatLinkedEntity(data.contributor) : 'None';
+
                     document.getElementById('date').innerText = data.date || 'None';
                     document.getElementById('place').innerText = data.place_of_publication || 'None';
                     
-                    // Subjects
+                    // Digital Access (856)
+                    if (data.isPartOf || data.url) {
+                        const digitalUrl = data.url || data.isPartOf;
+                        document.getElementById('digitalAccess').innerHTML = `<a href="${digitalUrl}" target="_blank">${digitalUrl}</a>`;
+                    } else {
+                        document.getElementById('digitalAccess').innerText = 'None';
+                    }
+
+                    // Subjects with Linked URIs (650 / 651 / FAST etc.)
                     const subList = document.getElementById('subjects');
                     subList.innerHTML = '';
-                    if (data.subject && data.subject.length > 0) {
-                        data.subject.forEach(sub => {
+                    if (data.subject) {
+                        const subjects = Array.isArray(data.subject) ? data.subject : [data.subject];
+                        subjects.forEach(sub => {
                             const li = document.createElement('li');
-                            li.innerText = sub.label;
+                            li.innerHTML = formatLinkedEntity(sub);
                             subList.appendChild(li);
                         });
                     } else {
@@ -119,10 +182,11 @@
                     // Notes
                     const noteList = document.getElementById('notes');
                     noteList.innerHTML = '';
-                    if (data.note && data.note.length > 0) {
-                        data.note.forEach(note => {
+                    if (data.note) {
+                        const notes = Array.isArray(data.note) ? data.note : [data.note];
+                        notes.forEach(note => {
                             const li = document.createElement('li');
-                            li.innerText = note;
+                            li.innerText = typeof note === 'string' ? note : note.label;
                             noteList.appendChild(li);
                         });
                     } else {
@@ -131,11 +195,6 @@
                 })
                 .catch(error => {
                     document.getElementById('title').innerText = 'Failed to load record. Please check the MMS ID.';
-                    document.getElementById('creator').innerText = '-';
-                    document.getElementById('date').innerText = '-';
-                    document.getElementById('place').innerText = '-';
-                    document.getElementById('subjects').innerHTML = '<li>-</li>';
-                    document.getElementById('notes').innerHTML = '<li>-</li>';
                     console.error('Error:', error);
                 });
         }
