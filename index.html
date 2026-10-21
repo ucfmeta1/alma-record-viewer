@@ -90,19 +90,22 @@
             }
         }
 
-        function extractURIs(obj, foundURIs = new Set()) {
+        // Deep recursive search to find ALL URIs in any object or nested sub-object
+        function findAllURIs(obj, foundURIs = new Set()) {
             if (!obj) return foundURIs;
+            
             if (typeof obj === 'string') {
                 if (obj.startsWith('http://') || obj.startsWith('https://')) {
-                    foundURIs.add(obj);
+                    // Filter out schema ontology vocabulary definitions
+                    if (!obj.includes('schema.org') && !obj.includes('w3.org')) {
+                        foundURIs.add(obj);
+                    }
                 }
             } else if (Array.isArray(obj)) {
-                obj.forEach(item => extractURIs(item, foundURIs));
+                obj.forEach(item => findAllURIs(item, foundURIs));
             } else if (typeof obj === 'object') {
                 for (let key in obj) {
-                    if (key !== '@type') {
-                        extractURIs(obj[key], foundURIs);
-                    }
+                    findAllURIs(obj[key], foundURIs);
                 }
             }
             return foundURIs;
@@ -110,9 +113,21 @@
 
         function formatLinkedEntity(entity) {
             if (!entity) return 'None';
-            let label = entity.label || entity['rdfs:label'] || entity.name || (typeof entity === 'string' ? entity : 'Entity');
             
-            const urisSet = extractURIs(entity);
+            // Extract best human-readable label
+            let label = '';
+            if (typeof entity === 'string') {
+                label = entity;
+            } else {
+                label = entity.label || entity['rdfs:label'] || entity.name || entity['schema:name'] || '';
+                if (!label && entity.agent) {
+                    label = entity.agent.label || entity.agent['rdfs:label'] || entity.agent.name || '';
+                }
+            }
+            if (!label) label = 'Entity';
+
+            // Recursively collect all URIs associated with this entity
+            const urisSet = findAllURIs(entity);
             let linksHtml = '';
 
             urisSet.forEach(uri => {
@@ -124,6 +139,7 @@
                 else if (uri.includes('fast.oclc.org')) domain = 'FAST';
                 else if (uri.includes('isni.org')) domain = 'ISNI';
                 else if (uri.includes('getty.edu')) domain = 'AAT / TGN';
+                else if (uri.includes('stars.library.ucf.edu')) domain = 'STARS';
 
                 linksHtml += ` <a href="${uri}" target="_blank" class="uri-badge">${domain}</a>`;
             });
@@ -142,29 +158,53 @@
                     return response.json();
                 })
                 .then(data => {
-                    document.getElementById('title').innerText = data.title || 'Untitled';
-                    
-                    // Creator (100)
-                    let creators = [];
-                    if (data.creator) {
-                        creators = Array.isArray(data.creator) ? data.creator : [data.creator];
+                    // Normalize graph array if JSON-LD uses @graph container
+                    let graph = [];
+                    if (data['@graph']) {
+                        graph = data['@graph'];
+                    } else if (Array.isArray(data)) {
+                        graph = data;
+                    } else {
+                        graph = [data];
                     }
-                    document.getElementById('creator').innerHTML = creators.length > 0 ? formatLinkedEntity(creators[0]) : 'None';
 
-                    // Contributor (700) - check multiple possible JSON-LD properties
+                    // Find main root object or merge attributes
+                    let root = graph.find(item => item.title || item['schema:name'] || item['@type']) || data;
+
+                    document.getElementById('title').innerText = root.title || root['schema:name'] || 'Untitled Record';
+
+                    // Creator (100)
+                    let creators = root.creator || root['schema:author'] || root['schema:creator'];
+                    if (creators) {
+                        const creatorArray = Array.isArray(creators) ? creators : [creators];
+                        document.getElementById('creator').innerHTML = formatLinkedEntity(creatorArray[0]);
+                    } else {
+                        document.getElementById('creator').innerText = 'None';
+                    }
+
+                    // Contributor (700)
                     const contribList = document.getElementById('contributor');
                     contribList.innerHTML = '';
                     let contributors = [];
-                    if (data.contributor) {
-                        contributors = Array.isArray(data.contributor) ? data.contributor : [data.contributor];
-                    } else if (data.contribution) {
-                        contributors = Array.isArray(data.contribution) ? data.contribution : [data.contribution];
-                    } else if (creators.length > 1) {
-                        contributors = creators.slice(1); // fallback if multiple creators
-                    }
+
+                    // Look through multiple possible JSON-LD / BIBFRAME mapping paths
+                    if (root.contributor) contributors.push(...(Array.isArray(root.contributor) ? root.contributor : [root.contributor]));
+                    if (root['schema:contributor']) contributors.push(...(Array.isArray(root['schema:contributor']) ? root['schema:contributor'] : [root['schema:contributor']]));
+                    if (root.contribution) contributors.push(...(Array.isArray(root.contribution) ? root.contribution : [root.contribution]));
+                    
+                    // Fallback to graph items matching Agent or Contributor types
+                    graph.forEach(item => {
+                        if (item['@type'] && (item['@type'].includes('Contributor') || item['@type'].includes('Person'))) {
+                            if (item !== root.creator && !contributors.includes(item)) {
+                                contributors.push(item);
+                            }
+                        }
+                    });
 
                     if (contributors.length > 0) {
-                        contributors.forEach(c => {
+                        // De-duplicate contributors
+                        const uniqueContribs = Array.from(new Set(contributors));
+                        uniqueContribs.forEach(c => {
                             const li = document.createElement('li');
                             li.innerHTML = formatLinkedEntity(c);
                             contribList.appendChild(li);
@@ -173,12 +213,14 @@
                         contribList.innerHTML = '<li>None</li>';
                     }
 
-                    document.getElementById('date').innerText = data.date || 'None';
-                    document.getElementById('place').innerText = data.place_of_publication || 'None';
-                    
+                    document.getElementById('date').innerText = root.date || root.datePublished || root['schema:datePublished'] || 'None';
+                    document.getElementById('place').innerText = root.place_of_publication || root['schema:locationCreated'] || 'None';
+
                     // Digital Access (856)
-                    if (data.isPartOf || data.url) {
-                        const digitalUrl = data.url || data.isPartOf;
+                    let digitalUrl = root.url || root.isPartOf || root['schema:url'] || root['schema:sameAs'];
+                    if (digitalUrl) {
+                        if (Array.isArray(digitalUrl)) digitalUrl = digitalUrl[0];
+                        if (typeof digitalUrl === 'object') digitalUrl = digitalUrl['@id'] || digitalUrl.url;
                         document.getElementById('digitalAccess').innerHTML = `<a href="${digitalUrl}" target="_blank">${digitalUrl}</a>`;
                     } else {
                         document.getElementById('digitalAccess').innerText = 'None';
@@ -188,8 +230,10 @@
                     const subList = document.getElementById('subjects');
                     subList.innerHTML = '';
                     let allSubjects = [];
-                    if (data.subject) allSubjects.push(...(Array.isArray(data.subject) ? data.subject : [data.subject]));
-                    if (data.spatial) allSubjects.push(...(Array.isArray(data.spatial) ? data.spatial : [data.spatial]));
+                    
+                    if (root.subject) allSubjects.push(...(Array.isArray(root.subject) ? root.subject : [root.subject]));
+                    if (root.spatial) allSubjects.push(...(Array.isArray(root.spatial) ? root.spatial : [root.spatial]));
+                    if (root['schema:keywords']) allSubjects.push(...(Array.isArray(root['schema:keywords']) ? root['schema:keywords'] : [root['schema:keywords']]));
 
                     if (allSubjects.length > 0) {
                         allSubjects.forEach(sub => {
@@ -200,15 +244,16 @@
                     } else {
                         subList.innerHTML = '<li>None</li>';
                     }
-                    
-                    // Notes
+
+                    // Notes (5xx)
                     const noteList = document.getElementById('notes');
                     noteList.innerHTML = '';
-                    if (data.note) {
-                        const notes = Array.isArray(data.note) ? data.note : [data.note];
-                        notes.forEach(note => {
+                    let notes = root.note || root['schema:description'];
+                    if (notes) {
+                        const noteArray = Array.isArray(notes) ? notes : [notes];
+                        noteArray.forEach(note => {
                             const li = document.createElement('li');
-                            li.innerText = typeof note === 'string' ? note : note.label;
+                            li.innerText = typeof note === 'string' ? note : (note.label || note.value || JSON.stringify(note));
                             noteList.appendChild(li);
                         });
                     } else {
@@ -217,7 +262,7 @@
                 })
                 .catch(error => {
                     document.getElementById('title').innerText = 'Failed to load record. Please check the MMS ID.';
-                    console.error('Error:', error);
+                    console.error('Error fetching Alma JSON-LD:', error);
                 });
         }
     </script>
